@@ -316,6 +316,18 @@ async function run() {
       res.send(result);
     });
 
+    // Admin: manage status
+    app.patch('/api/tuitions/:id/status', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: { status: status },
+      };
+      const result = await tuitionsCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+    
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
