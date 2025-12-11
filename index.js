@@ -218,7 +218,25 @@ async function run() {
       if (user.password) {
         user.password = await bcrypt.hash(user.password, 10);
       }
+      // Initialize role-specific fields
+      if (user.role === 'Student') {
+        user.school = '';
+        user.class = '';
+        user.address = '';
+        user.bio = '';
+      } else if (user.role === 'Tutor') {
+        user.qualifications = []; // Array of strings or objects
+        user.experience = '';
+        user.skills = []; // Array of strings
+        user.expectedSalary = 0;
+        user.about = ''; // Bio for tutor
+        user.location = '';
+      }
+      
+      user.phone = user.phone || '';
+      user.photoURL = user.photoURL || '';
       user.createdAt = new Date();
+      user.isActive = true;
       
       const result = await usersCollection.insertOne(user);
       const token = jwt.sign(
@@ -346,6 +364,20 @@ async function run() {
         .limit(6)
         .toArray();
       res.send(result);
+    });
+
+    // Get Single Tutor Public Profile
+    app.get('/tutors/:id', async (req, res) => {
+      const id = req.params.id;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid ID format' });
+      }
+      const query = { _id: new ObjectId(id), role: 'Tutor' };
+      const user = await usersCollection.findOne(query, { projection: { password: 0 } });
+      if (!user) {
+         return res.status(404).send({ message: 'Tutor not found' });
+      }
+      res.send(user);
     });
 
     app.patch('/users/:id', verifyToken, async (req, res) => {
