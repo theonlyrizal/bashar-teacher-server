@@ -327,7 +327,96 @@ async function run() {
       const result = await tuitionsCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
-    
+
+    // ========================
+    // APPLICATION APIs
+    // ========================
+
+    app.post('/api/applications', verifyToken, verifyTutor, async (req, res) => {
+      const application = req.body;
+      application.tutorId = new ObjectId(req.user.userId);
+      application.tuitionId = new ObjectId(application.tuitionId);
+      application.createdAt = new Date();
+      application.status = 'Pending';
+
+      // Check existence
+      const existing = await applicationsCollection.findOne({
+        tutorId: application.tutorId,
+        tuitionId: application.tuitionId,
+      });
+      if (existing) return res.send({ message: 'Already applied' });
+
+      const result = await applicationsCollection.insertOne(application);
+      res.send(result);
+    });
+
+    // Get apps for a specific tuition (for Student)
+    app.get(
+      '/api/applications/tuition/:tuitionId',
+      verifyToken,
+      verifyStudent,
+      async (req, res) => {
+        const tuitionId = req.params.tuitionId;
+        const query = { tuitionId: new ObjectId(tuitionId) };
+        const applications = await applicationsCollection.find(query).toArray();
+
+        // Join tutor info manually
+        const populated = await Promise.all(
+          applications.map(async (app) => {
+            const tutor = await usersCollection.findOne(
+              { _id: app.tutorId },
+              { projection: { password: 0 } }
+            );
+            return { ...app, tutor };
+          })
+        );
+
+        res.send(populated);
+      }
+    );
+
+    // Get tutor's applications
+    app.get('/api/applications/my-applications', verifyToken, verifyTutor, async (req, res) => {
+      const query = { tutorId: new ObjectId(req.user.userId) };
+      const applications = await applicationsCollection.find(query).toArray();
+
+      const populated = await Promise.all(
+        applications.map(async (app) => {
+          const tuition = await tuitionsCollection.findOne({ _id: app.tuitionId });
+          return { ...app, tuition };
+        })
+      );
+
+      res.send(populated);
+    });
+
+    // Approved applications (Tutor)
+    app.get('/api/applications/approved', verifyToken, verifyTutor, async (req, res) => {
+      const query = { tutorId: new ObjectId(req.user.userId), status: 'Approved' };
+      const applications = await applicationsCollection.find(query).toArray();
+
+      const populated = await Promise.all(
+        applications.map(async (app) => {
+          const tuition = await tuitionsCollection.findOne({ _id: app.tuitionId });
+          const student = tuition
+            ? await usersCollection.findOne({ _id: tuition.studentId })
+            : null;
+          return { ...app, tuition, student };
+        })
+      );
+
+      res.send(populated);
+    });
+
+    app.patch('/api/applications/:id/reject', verifyToken, verifyStudent, async (req, res) => {
+      const id = req.params.id;
+      const result = await applicationsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: 'Rejected' } }
+      );
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
