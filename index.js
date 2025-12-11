@@ -118,6 +118,33 @@ async function run() {
       res.send({ result, token, user: { ...user, _id: result.insertedId, password: undefined } });
     });
 
+    // Login User
+    app.post('/api/auth/login', async (req, res) => {
+      const { email, password } = req.body;
+      const user = await usersCollection.findOne({ email });
+      if (!user) {
+        return res.status(401).send({ message: 'Invalid credentials' });
+      }
+
+      // If user created via Google but trying to login with password (and has none)
+      if (!user.password) {
+        return res.status(401).send({ message: 'Please login with Google' });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).send({ message: 'Invalid credentials' });
+      }
+
+      const token = jwt.sign(
+        { userId: user._id, email: user.email, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.send({ token, user: { ...user, password: undefined } });
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
