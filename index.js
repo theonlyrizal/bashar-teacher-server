@@ -255,44 +255,52 @@ async function run() {
     });
 
     app.get('/api/tuitions', async (req, res) => {
-            const page = parseInt(req.query.page) || 1;
-            const limit = parseInt(req.query.limit) || 9;
-            const skip = (page - 1) * limit;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 9;
+      const skip = (page - 1) * limit;
 
-            const { search, subject, location, class: classFilter, sort } = req.query;
+      const { search, subject, location, class: classFilter, sort } = req.query;
 
-            let query = { status: 'Approved' };
+      let query = { status: 'Approved' };
 
-            if (search) {
-                query.$or = [
-                    { subject: { $regex: search, $options: 'i' } },
-                    { location: { $regex: search, $options: 'i' } }
-                ];
-            }
-            if (subject) query.subject = subject;
-            if (location) query.location = location;
-            if (classFilter) query.class = classFilter;
+      if (search) {
+        query.$or = [
+          { subject: { $regex: search, $options: 'i' } },
+          { location: { $regex: search, $options: 'i' } },
+        ];
+      }
+      if (subject) query.subject = subject;
+      if (location) query.location = location;
+      if (classFilter) query.class = classFilter;
 
-            let sortOptions = { createdAt: -1 };
-            if (sort === 'budgetAsc') sortOptions = { budget: 1 };
-            if (sort === 'budgetDesc') sortOptions = { budget: -1 };
+      let sortOptions = { createdAt: -1 };
+      if (sort === 'budgetAsc') sortOptions = { budget: 1 };
+      if (sort === 'budgetDesc') sortOptions = { budget: -1 };
 
-            const total = await tuitionsCollection.countDocuments(query);
-            const result = await tuitionsCollection.find(query)
-                .sort(sortOptions)
-                .skip(skip)
-                .limit(limit)
-                .toArray();
+      const total = await tuitionsCollection.countDocuments(query);
+      const result = await tuitionsCollection
+        .find(query)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limit)
+        .toArray();
 
-            res.send({
-                tuitions: result,
-                pagination: {
-                    total,
-                    page,
-                    pages: Math.ceil(total / limit)
-                }
-            });
-        });
+      res.send({
+        tuitions: result,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+        },
+      });
+    });
+
+    // Get own tuitions
+    app.get('/api/tuitions/my-tuitions', verifyToken, verifyStudent, async (req, res) => {
+      const query = { studentId: new ObjectId(req.user.userId) };
+      const result = await tuitionsCollection.find(query).sort({ createdAt: -1 }).toArray();
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
