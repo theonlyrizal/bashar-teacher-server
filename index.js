@@ -237,8 +237,23 @@ async function run() {
       res.send(result);
     });
 
+    // ========================
+    // TUITION APIs
+    // ========================
 
-    
+    app.post('/api/tuitions', verifyToken, verifyStudent, async (req, res) => {
+      const tuition = req.body;
+      tuition.createdAt = new Date();
+      tuition.studentId = new ObjectId(req.user.userId);
+      tuition.status = 'Pending';
+
+      // Ensure numbers
+      if (tuition.budget) tuition.budget = parseFloat(tuition.budget);
+
+      const result = await tuitionsCollection.insertOne(tuition);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
