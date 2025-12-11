@@ -90,7 +90,7 @@ async function run() {
     // ========================
 
     // user register-
-    app.post('/api/auth/register', async (req, res) => {
+    app.post('/auth/register', async (req, res) => {
       const user = req.body;
       // Check if user exists
       const query = { email: user.email };
@@ -122,7 +122,7 @@ async function run() {
     });
 
     // Login User
-    app.post('/api/auth/login', async (req, res) => {
+    app.post('/auth/login', async (req, res) => {
       const { email, password } = req.body;
       const user = await usersCollection.findOne({ email });
       if (!user) {
@@ -149,7 +149,7 @@ async function run() {
     });
 
     // Google Social Login (Sync/Register + JWT)
-    app.post('/api/auth/google', async (req, res) => {
+    app.post('/auth/google', async (req, res) => {
       const { token } = req.body; // Firebase ID Token
       if (!token) return res.status(400).send({ message: 'Token required' });
 
@@ -197,7 +197,7 @@ async function run() {
     });
 
     // Verify/Me
-    app.get('/api/auth/me', verifyToken, async (req, res) => {
+    app.get('/auth/me', verifyToken, async (req, res) => {
       const user = await usersCollection.findOne(
         { _id: new ObjectId(req.user.userId) },
         { projection: { password: 0 } }
@@ -209,12 +209,12 @@ async function run() {
     // USER APIs
     // ========================
 
-    app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
+    app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
       const result = await usersCollection.find({}, { projection: { password: 0 } }).toArray();
       res.send(result);
     });
 
-    app.get('/api/users/tutors/latest', async (req, res) => {
+    app.get('/users/tutors/latest', async (req, res) => {
       const result = await usersCollection
         .find({ role: 'Tutor' }, { projection: { password: 0 } })
         .sort({ createdAt: -1 })
@@ -223,7 +223,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch('/api/users/:id', verifyToken, async (req, res) => {
+    app.patch('/users/:id', verifyToken, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updatedDoc = {
@@ -233,7 +233,7 @@ async function run() {
       res.send(result);
     });
 
-    app.delete('/api/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+    app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await usersCollection.deleteOne(query);
@@ -244,7 +244,7 @@ async function run() {
     // TUITION APIs
     // ========================
 
-    app.post('/api/tuitions', verifyToken, verifyStudent, async (req, res) => {
+    app.post('/tuitions', verifyToken, verifyStudent, async (req, res) => {
       const tuition = req.body;
       tuition.createdAt = new Date();
       tuition.studentId = new ObjectId(req.user.userId);
@@ -257,7 +257,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get('/api/tuitions', async (req, res) => {
+    app.get('/tuitions', async (req, res) => {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 9;
       const skip = (page - 1) * limit;
@@ -299,20 +299,20 @@ async function run() {
     });
 
     // Get own tuitions
-    app.get('/api/tuitions/my-tuitions', verifyToken, verifyStudent, async (req, res) => {
+    app.get('/tuitions/my-tuitions', verifyToken, verifyStudent, async (req, res) => {
       const query = { studentId: new ObjectId(req.user.userId) };
       const result = await tuitionsCollection.find(query).sort({ createdAt: -1 }).toArray();
       res.send(result);
     });
 
-    app.get('/api/tuitions/:id', async (req, res) => {
+    app.get('/tuitions/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await tuitionsCollection.findOne(query);
       res.send(result);
     });
 
-    app.delete('/api/tuitions/:id', verifyToken, async (req, res) => {
+    app.delete('/tuitions/:id', verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await tuitionsCollection.deleteOne(query);
@@ -320,7 +320,7 @@ async function run() {
     });
 
     // Admin: manage status
-    app.patch('/api/tuitions/:id/status', verifyToken, verifyAdmin, async (req, res) => {
+    app.patch('/tuitions/:id/status', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { status } = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -335,7 +335,7 @@ async function run() {
     // APPLICATION APIs
     // ========================
 
-    app.post('/api/applications', verifyToken, verifyTutor, async (req, res) => {
+    app.post('/applications', verifyToken, verifyTutor, async (req, res) => {
       const application = req.body;
       application.tutorId = new ObjectId(req.user.userId);
       application.tuitionId = new ObjectId(application.tuitionId);
@@ -355,7 +355,7 @@ async function run() {
 
     // Get apps for a specific tuition (for Student)
     app.get(
-      '/api/applications/tuition/:tuitionId',
+      '/applications/tuition/:tuitionId',
       verifyToken,
       verifyStudent,
       async (req, res) => {
@@ -379,7 +379,7 @@ async function run() {
     );
 
     // Get tutor's applications
-    app.get('/api/applications/my-applications', verifyToken, verifyTutor, async (req, res) => {
+    app.get('/applications/my-applications', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId) };
       const applications = await applicationsCollection.find(query).toArray();
 
@@ -394,7 +394,7 @@ async function run() {
     });
 
     // Approved applications (Tutor)
-    app.get('/api/applications/approved', verifyToken, verifyTutor, async (req, res) => {
+    app.get('/applications/approved', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId), status: 'Approved' };
       const applications = await applicationsCollection.find(query).toArray();
 
@@ -411,7 +411,7 @@ async function run() {
       res.send(populated);
     });
 
-    app.patch('/api/applications/:id/reject', verifyToken, verifyStudent, async (req, res) => {
+    app.patch('/applications/:id/reject', verifyToken, verifyStudent, async (req, res) => {
       const id = req.params.id;
       const result = await applicationsCollection.updateOne(
         { _id: new ObjectId(id) },
@@ -426,7 +426,7 @@ async function run() {
 
     // Create Payment Intent/Session
     app.post(
-      '/api/payments/create-checkout-session',
+      '/payments/create-checkout-session',
       verifyToken,
       verifyStudent,
       async (req, res) => {
@@ -468,7 +468,7 @@ async function run() {
     );
 
     // Save Payment Info & Approve Tutor
-    app.post('/api/payments/success', verifyToken, async (req, res) => {
+    app.post('/payments/success', verifyToken, async (req, res) => {
       const { sessionId, applicationId } = req.body;
 
       // Verify with Stripe
@@ -507,7 +507,7 @@ async function run() {
     });
 
     // Get Payments (Student)
-    app.get('/api/payments/my-payments', verifyToken, verifyStudent, async (req, res) => {
+    app.get('/payments/my-payments', verifyToken, verifyStudent, async (req, res) => {
       const query = { studentId: new ObjectId(req.user.userId) };
       const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
       const populated = await Promise.all(
@@ -520,14 +520,14 @@ async function run() {
     });
 
     // Get Revenue (Tutor)
-    app.get('/api/payments/my-revenue', verifyToken, verifyTutor, async (req, res) => {
+    app.get('/payments/my-revenue', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId) };
       const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
       res.send(payments);
     });
 
     // Admin Stats
-    app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
+    app.get('/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
       const totalTuitions = await tuitionsCollection.countDocuments();
       const totalRevenueResult = await paymentsCollection
