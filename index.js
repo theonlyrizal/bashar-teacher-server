@@ -317,6 +317,16 @@ async function run() {
       });
     });
 
+
+    app.get('/tuitions/latest', async (req, res) => {
+      const result = await tuitionsCollection
+        .find({ status: 'Approved' })
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+      res.send(result);
+    });
+
     // Get own tuitions
     app.get('/tuitions/my-tuitions', verifyToken, verifyStudent, async (req, res) => {
       const query = { studentId: new ObjectId(req.user.userId) };
@@ -326,6 +336,9 @@ async function run() {
 
     app.get('/tuitions/:id', async (req, res) => {
       const id = req.params.id;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid ID format' });
+      }
       const query = { _id: new ObjectId(id) };
       const result = await tuitionsCollection.findOne(query);
       res.send(result);
