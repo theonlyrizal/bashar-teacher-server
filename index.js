@@ -82,6 +82,42 @@ async function run() {
     const applicationsCollection = database.collection('applications');
     const paymentsCollection = database.collection('payments');
 
+    // ========================
+    // AUTH APIs
+    // ========================
+
+    // user register-
+    app.post('/api/auth/register', async (req, res) => {
+      const user = req.body;
+      // Check if user exists
+      const query = { email: user.email };
+      const existingUser = await usersCollection.findOne(query);
+      if (existingUser) {
+        return res.send({ message: 'User already exists', insertedId: null });
+      }
+
+      // Hash password
+      if (user.password) {
+        user.password = await bcrypt.hash(user.password, 10);
+      }
+
+      user.createdAt = new Date();
+      // Default role if not provided
+      if (!user.role) user.role = 'Student';
+
+      // Allow Google Sign In reg without password
+      const result = await usersCollection.insertOne(user);
+
+      // Generate JWT
+      const token = jwt.sign(
+        { userId: result.insertedId, email: user.email, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.send({ result, token, user: { ...user, _id: result.insertedId, password: undefined } });
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
