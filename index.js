@@ -145,6 +145,53 @@ async function run() {
       res.send({ token, user: { ...user, password: undefined } });
     });
 
+    // Google Social Login (Sync/Register + JWT)
+    app.post('/api/auth/google', async (req, res) => {
+      const { token } = req.body; // Firebase ID Token
+      if (!token) return res.status(400).send({ message: 'Token required' });
+
+      try {
+        // Verify Firebase Token
+        const decoded = await admin.auth().verifyIdToken(token);
+        const { email, name, picture, uid } = decoded;
+
+        let user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          // Register new user
+          user = {
+            name,
+            email,
+            role: 'Student', // Default
+            photoURL: picture,
+            firebaseUid: uid,
+            createdAt: new Date(),
+            isActive: true,
+          };
+          const result = await usersCollection.insertOne(user);
+          user._id = result.insertedId;
+        } else {
+          // Update sync info
+          if (!user.firebaseUid) {
+            await usersCollection.updateOne(
+              { _id: user._id },
+              { $set: { firebaseUid: uid, photoURL: picture } }
+            );
+          }
+        }
+
+        // Generate our JWT
+        const jwtToken = jwt.sign(
+          { userId: user._id, email: user.email, role: user.role },
+          process.env.JWT_SECRET,
+          { expiresIn: '7d' }
+        );
+
+        res.send({ token: jwtToken, user: { ...user, password: undefined } });
+      } catch (error) {
+        res.status(401).send({ message: 'Invalid token' });
+      }
+    });
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
