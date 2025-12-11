@@ -192,6 +192,15 @@ async function run() {
         res.status(401).send({ message: 'Invalid token' });
       }
     });
+
+    // Verify/Me
+    app.get('/api/auth/me', verifyToken, async (req, res) => {
+      const user = await usersCollection.findOne(
+        { _id: new ObjectId(req.user.userId) },
+        { projection: { password: 0 } }
+      );
+      res.send(user);
+    });
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
