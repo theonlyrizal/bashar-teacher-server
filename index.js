@@ -417,6 +417,112 @@ async function run() {
       res.send(result);
     });
 
+    // ========================
+    // PAYMENT APIs
+    // ========================
+
+    // Create Payment Intent/Session
+    app.post(
+      '/api/payments/create-checkout-session',
+      verifyToken,
+      verifyStudent,
+      async (req, res) => {
+        const { applicationId, salary } = req.body;
+
+        const application = await applicationsCollection.findOne({
+          _id: new ObjectId(applicationId),
+        });
+        if (!application) return res.send({ message: 'Application not found' });
+
+        const tuition = await tuitionsCollection.findOne({ _id: application.tuitionId });
+
+        const amount = salary || application.expectedSalary;
+        const amountCents = Math.round(amount * 100);
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          customer_email: req.user.email,
+          line_items: [
+            {
+              price_data: {
+                currency: 'usd',
+                product_data: {
+                  name: `Tuition: ${tuition.subject}`,
+                  description: `Class ${tuition.class}`,
+                },
+                unit_amount: amountCents,
+              },
+              quantity: 1,
+            },
+          ],
+          mode: 'payment',
+          success_url: `${process.env.CLIENT_URL}/dashboard/payment/success?session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+          cancel_url: `${process.env.CLIENT_URL}/dashboard/student/my-tuitions`,
+        });
+
+        res.send({ url: session.url });
+      }
+    );
+
+    // Save Payment Info & Approve Tutor
+    app.post('/api/payments/success', verifyToken, async (req, res) => {
+      const { sessionId, applicationId } = req.body;
+
+      // Verify with Stripe
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status === 'paid') {
+        const application = await applicationsCollection.findOne({
+          _id: new ObjectId(applicationId),
+        });
+
+        // Idempotency
+        const existingPayment = await paymentsCollection.findOne({ transactionId: sessionId });
+        if (existingPayment) return res.send({ message: 'Payment already recorded' });
+
+        // Approve Application
+        await applicationsCollection.updateOne(
+          { _id: new ObjectId(applicationId) },
+          { $set: { status: 'Approved' } }
+        );
+
+        // Create Payment Record
+        const payment = {
+          transactionId: sessionId,
+          studentId: new ObjectId(req.user.userId),
+          tutorId: application.tutorId,
+          tuitionId: application.tuitionId,
+          amount: session.amount_total / 100,
+          date: new Date(),
+          status: 'Completed',
+        };
+
+        const result = await paymentsCollection.insertOne(payment);
+        res.send(result);
+      } else {
+        res.status(400).send({ message: 'Payment failed' });
+      }
+    });
+
+    // Get Payments (Student)
+    app.get('/api/payments/my-payments', verifyToken, verifyStudent, async (req, res) => {
+      const query = { studentId: new ObjectId(req.user.userId) };
+      const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
+      const populated = await Promise.all(
+        payments.map(async (p) => {
+          const tuition = await tuitionsCollection.findOne({ _id: p.tuitionId });
+          return { ...p, tuition };
+        })
+      );
+      res.send(populated);
+    });
+
+    // Get Revenue (Tutor)
+    app.get('/api/payments/my-revenue', verifyToken, verifyTutor, async (req, res) => {
+      const query = { tutorId: new ObjectId(req.user.userId) };
+      const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
+      res.send(payments);
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
