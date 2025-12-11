@@ -4,12 +4,107 @@ require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+// Initialize Stripe with your Secret Key
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const admin = require('firebase-admin');
 
 const app = express();
 const port = process.env.PORT || 5000;
 
+// --- IMPORTANT: STRIPE WEBHOOK ENDPOINT MUST COME BEFORE express.json() ---
+// This is because Stripe sends the request body as raw text, which is required for signature verification.
+// We apply a specific raw body parser only for the webhook route.
+app.post(
+  '/stripe-webhook',
+  express.raw({ type: 'application/json' }), // Specific middleware for raw body
+  async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+      // 1. Verify the event signature using the Webhook Secret
+      // Make sure process.env.STRIPE_WEBHOOK_SECRET is set in your .env file
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET 
+      );
+    } catch (err) {
+      console.error(`Webhook Signature Verification Failed: ${err.message}`);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    
+    // 2. Handle the event
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      
+      // Get the custom data (metadata) we passed during session creation
+      const applicationId = session.metadata.applicationId;
+      const studentId = session.metadata.studentId;
+
+      console.log(`Webhook received for session: ${session.id}. App ID: ${applicationId}`);
+
+      // Check if this payment was already processed (Idempotency)
+      const paymentsCollection = client.db('basharTeacherDB').collection('payments');
+      const applicationsCollection = client.db('basharTeacherDB').collection('applications');
+
+      const existingPayment = await paymentsCollection.findOne({ transactionId: session.id });
+      if (existingPayment) {
+        console.log('Payment already recorded (Idempotency handled).');
+        return res.json({ received: true, message: 'Payment already recorded' });
+      }
+
+      try {
+        // Retrieve application details
+        const application = await applicationsCollection.findOne({
+          _id: new ObjectId(applicationId),
+        });
+        
+        if (!application) {
+            console.error(`Application not found for ID: ${applicationId}`);
+            return res.json({ received: true }); 
+        }
+
+        // A. Approve Application
+        await applicationsCollection.updateOne(
+          { _id: new ObjectId(applicationId) },
+          { $set: { status: 'Approved' } }
+        );
+
+        // B. Create Payment Record
+        const payment = {
+          transactionId: session.id, // Unique Stripe ID
+          studentId: new ObjectId(studentId), 
+          tutorId: application.tutorId, 
+          tuitionId: application.tuitionId,
+          amount: session.amount_total / 100,
+          date: new Date(),
+          status: 'Completed',
+        };
+
+        const result = await paymentsCollection.insertOne(payment);
+        console.log('Payment recorded successfully:', result.insertedId);
+
+      } catch (dbError) {
+        console.error('Database update error in webhook:', dbError);
+        // Important: Return a 500 status code to Stripe so it retries the webhook
+        return res.status(500).send('Internal Server Error'); 
+      }
+    } else {
+        // Handle other relevant event types if needed
+        console.log(`Unhandled event type ${event.type}`);
+    }
+
+    // 3. Return a 200 to acknowledge receipt of the event
+    res.json({ received: true });
+  }
+);
+// --- END OF WEBHOOK ENDPOINT ---
+
+// Apply standard express.json() middleware for all other routes
+app.use(express.json()); 
+
+// Configure CORS and Firebase as before
 app.use(cors({
   origin: [
     "http://localhost:5173",
@@ -18,7 +113,6 @@ app.use(cors({
   ],
   credentials: true
 }));
-app.use(express.json());
 
 // Firebase admin sdk
 const decoded = Buffer.from(process.env.FIREBASE_SERVICE_KEY, 'base64').toString('utf8');
@@ -27,8 +121,9 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-//JWT Ver middleware
+// JWT Ver middleware (same as before)
 const verifyToken = (req, res, next) => {
+  // ... (Your JWT logic)
   const authorization = req.headers.authorization;
   if (!authorization) {
     return res.status(401).send({ message: 'Unauthorized access' });
@@ -43,16 +138,15 @@ const verifyToken = (req, res, next) => {
   });
 };
 
-// Admin Middleware
+// Admin Middleware (same as before)
 const verifyAdmin = async (req, res, next) => {
-  const email = req.user.email;
   if (req.user.role !== 'Admin') {
     return res.status(403).send({ message: 'Forbidden access' });
   }
   next();
 };
 
-// Tutor Middleware
+// Tutor Middleware (same as before)
 const verifyTutor = async (req, res, next) => {
   if (req.user.role !== 'Tutor') {
     return res.status(403).send({ message: 'Forbidden access' });
@@ -60,7 +154,7 @@ const verifyTutor = async (req, res, next) => {
   next();
 };
 
-// Student Middleware
+// Student Middleware (same as before)
 const verifyStudent = async (req, res, next) => {
   if (req.user.role !== 'Student') {
     return res.status(403).send({ message: 'Forbidden access' });
@@ -68,7 +162,7 @@ const verifyStudent = async (req, res, next) => {
   next();
 };
 
-// MONGO CLIENT STUFF
+// MONGO CLIENT STUFF (same as before)
 const user = process.env.MONGO_USER;
 const pass = process.env.MONGO_PASS;
 const uri = `mongodb+srv://${user}:${encodeURIComponent(
@@ -86,7 +180,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+    // Connect the client to the server (optional starting in v4.7)
     await client.connect();
 
     const database = client.db('basharTeacherDB');
@@ -96,65 +190,78 @@ async function run() {
     const paymentsCollection = database.collection('payments');
 
     // ========================
-    // AUTH APIs
+    // AUTH, USER, TUITION, APPLICATION APIs (NO CHANGES)
     // ========================
+    // ... (Your existing code for /auth, /users, /tuitions, /applications)
 
     // user register-
     app.post('/auth/register', async (req, res) => {
       const user = req.body;
-      // Check if user exists
       const query = { email: user.email };
       const existingUser = await usersCollection.findOne(query);
       if (existingUser) {
         return res.send({ message: 'User already exists', insertedId: null });
       }
-
-      // Hash password
       if (user.password) {
         user.password = await bcrypt.hash(user.password, 10);
       }
-
       user.createdAt = new Date();
-      // Default role if not provided
       if (!user.role) user.role = 'Student';
-
-      // Allow Google Sign In reg without password
       const result = await usersCollection.insertOne(user);
-
-      // Generate JWT
       const token = jwt.sign(
         { userId: result.insertedId, email: user.email, role: user.role },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
-
       res.send({ success: true, result, token, user: { ...user, _id: result.insertedId, password: undefined } });
     });
 
     // Login User
     app.post('/auth/login', async (req, res) => {
       const { email, password } = req.body;
+
+      // 1. Check for Admin via ENV (Hardcoded Security)
+      if (
+        process.env.ADMIN_EMAIL &&
+        email === process.env.ADMIN_EMAIL &&
+        process.env.ADMIN_PASS &&
+        password === process.env.ADMIN_PASS
+      ) {
+        const token = jwt.sign(
+          { userId: 'admin-static-id', email: email, role: 'Admin' },
+          process.env.JWT_SECRET,
+          { expiresIn: '7d' }
+        );
+        return res.send({
+          success: true,
+          token,
+          user: {
+            _id: 'admin-static-id',
+            name: 'Super Admin',
+            email: email,
+            role: 'Admin',
+            photoURL: 'https://i.ibb.co/4pDNDk1/avatar.png',
+          },
+        });
+      }
+
+      // 2. Regular User Login
       const user = await usersCollection.findOne({ email });
       if (!user) {
         return res.status(401).send({ message: 'Invalid credentials' });
       }
-
-      // If user created via Google but trying to login with password (and has none)
       if (!user.password) {
         return res.status(401).send({ message: 'Please login with Google' });
       }
-
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
         return res.status(401).send({ message: 'Invalid credentials' });
       }
-
       const token = jwt.sign(
         { userId: user._id, email: user.email, role: user.role },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
-
       res.send({ success: true, token, user: { ...user, password: undefined } });
     });
 
@@ -162,16 +269,11 @@ async function run() {
     app.post('/auth/google', async (req, res) => {
       const { token } = req.body; // Firebase ID Token
       if (!token) return res.status(400).send({ message: 'Token required' });
-
       try {
-        // Verify Firebase Token
         const decoded = await admin.auth().verifyIdToken(token);
         const { email, name, picture, uid } = decoded;
-
         let user = await usersCollection.findOne({ email });
-
         if (!user) {
-          // Register new user
           user = {
             name,
             email,
@@ -184,7 +286,6 @@ async function run() {
           const result = await usersCollection.insertOne(user);
           user._id = result.insertedId;
         } else {
-          // Update sync info
           if (!user.firebaseUid) {
             await usersCollection.updateOne(
               { _id: user._id },
@@ -192,14 +293,11 @@ async function run() {
             );
           }
         }
-
-        // Generate our JWT
         const jwtToken = jwt.sign(
           { userId: user._id, email: user.email, role: user.role },
           process.env.JWT_SECRET,
           { expiresIn: '7d' }
         );
-
         res.send({ success: true, token: jwtToken, user: { ...user, password: undefined } });
       } catch (error) {
         res.status(401).send({ message: 'Invalid token' });
@@ -215,7 +313,7 @@ async function run() {
       res.send({ success: true, user });
     });
 
-    // Verify/Me (Keeping for backward compatibility if needed, but verify-token is primary now)
+    // Verify/Me 
     app.get('/auth/me', verifyToken, async (req, res) => {
       const user = await usersCollection.findOne(
         { _id: new ObjectId(req.user.userId) },
@@ -268,10 +366,7 @@ async function run() {
       tuition.createdAt = new Date();
       tuition.studentId = new ObjectId(req.user.userId);
       tuition.status = 'Pending';
-
-      // Ensure numbers
       if (tuition.budget) tuition.budget = parseFloat(tuition.budget);
-
       const result = await tuitionsCollection.insertOne(tuition);
       res.send(result);
     });
@@ -467,12 +562,14 @@ async function run() {
         const application = await applicationsCollection.findOne({
           _id: new ObjectId(applicationId),
         });
-        if (!application) return res.send({ message: 'Application not found' });
+        if (!application) return res.status(404).send({ message: 'Application not found' });
 
         const tuition = await tuitionsCollection.findOne({ _id: application.tuitionId });
+        if (!tuition) return res.status(404).send({ message: 'Tuition not found' });
 
         const amount = salary || application.expectedSalary;
-        const amountCents = Math.round(amount * 100);
+        // Stripe uses the smallest currency unit (cents/pennies), so multiply by 100
+        const amountCents = Math.round(amount * 100); 
 
         const session = await stripe.checkout.sessions.create({
           payment_method_types: ['card'],
@@ -491,7 +588,14 @@ async function run() {
             },
           ],
           mode: 'payment',
-          success_url: `${process.env.CLIENT_URL}/dashboard/payment/success?session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+          // ⚠️ IMPORTANT CHANGE: Using metadata to pass critical IDs
+          metadata: {
+              applicationId: applicationId, 
+              studentId: req.user.userId,
+          },
+          // Success URL only needs session ID for client-side display/lookup, 
+          // the critical fulfillment is handled by the webhook.
+          success_url: `${process.env.CLIENT_URL}/dashboard/payment/success?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${process.env.CLIENT_URL}/dashboard/student/my-tuitions`,
         });
 
@@ -499,46 +603,44 @@ async function run() {
       }
     );
 
-    // Save Payment Info & Approve Tutor
+    // Save Payment Info & Approve Tutor (SIMPLIFIED/SECURED)
+    // This route is now only used for client-side verification/display, 
+    // the fulfillment logic is safely in the webhook.
     app.post('/payments/success', verifyToken, async (req, res) => {
-      const { sessionId, applicationId } = req.body;
+      const { sessionId } = req.body;
 
-      // Verify with Stripe
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      if (session.payment_status === 'paid') {
-        const application = await applicationsCollection.findOne({
-          _id: new ObjectId(applicationId),
-        });
+      try {
+          // Verify with Stripe that the session exists and was paid
+          const session = await stripe.checkout.sessions.retrieve(sessionId);
+          
+          if (session.payment_status !== 'paid') {
+              return res.status(400).send({ message: 'Payment not completed' });
+          }
+          
+          // Check the database to see if the webhook already recorded the payment (Idempotency)
+          const existingPayment = await paymentsCollection.findOne({ transactionId: sessionId });
+          
+          if (existingPayment) {
+              // Webhook succeeded, payment is safe. Just confirm to the client.
+              return res.send({ 
+                  message: 'Payment verified and recorded (via webhook)', 
+                  payment: existingPayment 
+              });
+          } else {
+              // This is a rare edge case where the user hit the success URL before the webhook
+              // but we still want to confirm. You could trigger a small delay here 
+              // or just return a status indicating "Payment in process".
+              // For simplicity, we just confirm that Stripe says it's paid.
+              return res.send({ message: 'Payment verified. Fulfillment processing.', session_id: sessionId });
+          }
 
-        // Idempotency
-        const existingPayment = await paymentsCollection.findOne({ transactionId: sessionId });
-        if (existingPayment) return res.send({ message: 'Payment already recorded' });
-
-        // Approve Application
-        await applicationsCollection.updateOne(
-          { _id: new ObjectId(applicationId) },
-          { $set: { status: 'Approved' } }
-        );
-
-        // Create Payment Record
-        const payment = {
-          transactionId: sessionId,
-          studentId: new ObjectId(req.user.userId),
-          tutorId: application.tutorId,
-          tuitionId: application.tuitionId,
-          amount: session.amount_total / 100,
-          date: new Date(),
-          status: 'Completed',
-        };
-
-        const result = await paymentsCollection.insertOne(payment);
-        res.send(result);
-      } else {
-        res.status(400).send({ message: 'Payment failed' });
+      } catch (error) {
+          console.error('Error retrieving Stripe session:', error);
+          res.status(500).send({ message: 'Failed to verify payment details' });
       }
     });
 
-    // Get Payments (Student)
+    // Get Payments (Student) (Same as before)
     app.get('/payments/my-payments', verifyToken, verifyStudent, async (req, res) => {
       const query = { studentId: new ObjectId(req.user.userId) };
       const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
@@ -551,14 +653,14 @@ async function run() {
       res.send(populated);
     });
 
-    // Get Revenue (Tutor)
+    // Get Revenue (Tutor) (Same as before)
     app.get('/payments/my-revenue', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId) };
       const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
       res.send(payments);
     });
 
-    // Admin Stats
+    // Admin Stats (Same as before)
     app.get('/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
       const totalTuitions = await tuitionsCollection.countDocuments();
