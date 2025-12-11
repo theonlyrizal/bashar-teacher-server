@@ -45,7 +45,30 @@ const verifyToken = (req, res, next) => {
     });
 };
 
-//
+// Admin Middleware
+const verifyAdmin = async (req, res, next) => {
+    const email = req.user.email;
+    if(req.user.role !== 'Admin') {
+         return res.status(403).send({ message: 'Forbidden access' });
+    }
+    next();
+};
+
+// Tutor Middleware
+const verifyTutor = async (req, res, next) => {
+    if(req.user.role !== 'Tutor') {
+         return res.status(403).send({ message: 'Forbidden access' });
+    }
+    next();
+};
+
+// Student Middleware
+const verifyStudent = async (req, res, next) => {
+    if(req.user.role !== 'Student') {
+         return res.status(403).send({ message: 'Forbidden access' });
+    }
+    next();
+};
 
 async function run() {
   try {
