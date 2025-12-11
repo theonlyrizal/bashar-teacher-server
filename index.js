@@ -194,19 +194,32 @@ async function run() {
     // ========================
     // ... (Your existing code for /auth, /users, /tuitions, /applications)
 
-    // user register-
+    // user register
     app.post('/auth/register', async (req, res) => {
       const user = req.body;
+      const { adminToken } = req.body;
+
       const query = { email: user.email };
       const existingUser = await usersCollection.findOne(query);
       if (existingUser) {
         return res.send({ message: 'User already exists', insertedId: null });
       }
+      
+      // Determine Role based on Token
+      if (adminToken && adminToken === process.env.ADMIN_TOKEN) {
+        user.role = 'Admin';
+      } else if (!user.role) {
+        user.role = 'Student';
+      }
+
+      // Cleanup
+      delete user.adminToken; // Don't save the token in DB
+
       if (user.password) {
         user.password = await bcrypt.hash(user.password, 10);
       }
       user.createdAt = new Date();
-      if (!user.role) user.role = 'Student';
+      
       const result = await usersCollection.insertOne(user);
       const token = jwt.sign(
         { userId: result.insertedId, email: user.email, role: user.role },
@@ -218,17 +231,12 @@ async function run() {
 
     // Login User
     app.post('/auth/login', async (req, res) => {
-      const { email, password } = req.body;
+      const { email, password, adminToken } = req.body;
 
-      // 1. Check for Admin via ENV (Hardcoded Security)
-      if (
-        process.env.ADMIN_EMAIL &&
-        email === process.env.ADMIN_EMAIL &&
-        process.env.ADMIN_PASS &&
-        password === process.env.ADMIN_PASS
-      ) {
+      // 1. Check for Admin via TOKEN (Super Admin Bypass)
+      if (adminToken && adminToken === process.env.ADMIN_TOKEN) {
         const token = jwt.sign(
-          { userId: 'admin-static-id', email: email, role: 'Admin' },
+          { userId: 'admin-static-id', email: 'admin@bashar.com', role: 'Admin' },
           process.env.JWT_SECRET,
           { expiresIn: '7d' }
         );
@@ -238,7 +246,7 @@ async function run() {
           user: {
             _id: 'admin-static-id',
             name: 'Super Admin',
-            email: email,
+            email: 'admin@bashar.com',
             role: 'Admin',
             photoURL: 'https://i.ibb.co/4pDNDk1/avatar.png',
           },
@@ -660,16 +668,47 @@ async function run() {
       res.send(payments);
     });
 
-    // Admin Stats (Same as before)
+    // Admin Stats
     app.get('/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
       const totalTuitions = await tuitionsCollection.countDocuments();
+      const totalTransactions = await paymentsCollection.countDocuments();
       const totalRevenueResult = await paymentsCollection
         .aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }])
         .toArray();
       const totalRevenue = totalRevenueResult[0]?.total || 0;
 
-      res.send({ totalUsers, totalTuitions, totalRevenue });
+      res.send({ 
+        totalUsers, 
+        totalTuitions, 
+        totalRevenue,
+        totalTransactions 
+      });
+    });
+
+    // Admin: Get All Payments
+    app.get('/admin/payments', verifyToken, verifyAdmin, async (req, res) => {
+        const payments = await paymentsCollection.find().sort({ date: -1 }).limit(50).toArray();
+         const populated = await Promise.all(
+            payments.map(async (p) => {
+              const student = await usersCollection.findOne({ _id: new ObjectId(p.studentId) });
+              const tutor = await usersCollection.findOne({ _id: new ObjectId(p.tutorId) });
+              return { ...p, studentId: student, tutorId: tutor };
+            })
+          );
+        res.send(populated);
+    });
+
+    // Admin: Get All Tuitions (for management)
+    app.get('/admin/tuitions', verifyToken, verifyAdmin, async (req, res) => {
+      const tuitions = await tuitionsCollection.find().sort({ createdAt: -1 }).toArray();
+       const populated = await Promise.all(
+          tuitions.map(async (t) => {
+             const student = await usersCollection.findOne({ _id: new ObjectId(t.studentId) });
+             return { ...t, studentId: student };
+          })
+       );
+      res.send(populated);
     });
 
     // Send a ping to confirm a successful connection
