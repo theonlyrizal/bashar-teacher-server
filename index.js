@@ -10,6 +10,16 @@ const admin = require('firebase-admin');
 const app = express();
 const port = process.env.PORT || 5000;
 
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://bashar-teacher.web.app",
+    "https://bashar-teacher.firebaseapp.com"
+  ],
+  credentials: true
+}));
+app.use(express.json());
+
 // Firebase admin sdk
 const decoded = Buffer.from(process.env.FIREBASE_SERVICE_KEY, 'base64').toString('utf8');
 const serviceAccount = JSON.parse(decoded);
@@ -118,7 +128,7 @@ async function run() {
         { expiresIn: '7d' }
       );
 
-      res.send({ result, token, user: { ...user, _id: result.insertedId, password: undefined } });
+      res.send({ success: true, result, token, user: { ...user, _id: result.insertedId, password: undefined } });
     });
 
     // Login User
@@ -145,7 +155,7 @@ async function run() {
         { expiresIn: '7d' }
       );
 
-      res.send({ token, user: { ...user, password: undefined } });
+      res.send({ success: true, token, user: { ...user, password: undefined } });
     });
 
     // Google Social Login (Sync/Register + JWT)
@@ -190,19 +200,28 @@ async function run() {
           { expiresIn: '7d' }
         );
 
-        res.send({ token: jwtToken, user: { ...user, password: undefined } });
+        res.send({ success: true, token: jwtToken, user: { ...user, password: undefined } });
       } catch (error) {
         res.status(401).send({ message: 'Invalid token' });
       }
     });
 
-    // Verify/Me
+    // Verify Token
+    app.get('/auth/verify-token', verifyToken, async (req, res) => {
+      const user = await usersCollection.findOne(
+        { _id: new ObjectId(req.user.userId) },
+        { projection: { password: 0 } }
+      );
+      res.send({ success: true, user });
+    });
+
+    // Verify/Me (Keeping for backward compatibility if needed, but verify-token is primary now)
     app.get('/auth/me', verifyToken, async (req, res) => {
       const user = await usersCollection.findOne(
         { _id: new ObjectId(req.user.userId) },
         { projection: { password: 0 } }
       );
-      res.send(user);
+      res.send({ success: true, user });
     });
 
     // ========================
