@@ -14,6 +14,48 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+//JWT Ver middleware
+const verifyToken = (req, res, next) => {
+  const authorization = req.headers.authorization;
+  if (!authorization) {
+    return res.status(401).send({ message: 'Unauthorized access' });
+  }
+  const token = authorization.split(' ')[1];
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: 'Unauthorized access' });
+    }
+    req.user = decoded;
+    next();
+  });
+};
+
+// Admin Middleware
+const verifyAdmin = async (req, res, next) => {
+  const email = req.user.email;
+  if (req.user.role !== 'Admin') {
+    return res.status(403).send({ message: 'Forbidden access' });
+  }
+  next();
+};
+
+// Tutor Middleware
+const verifyTutor = async (req, res, next) => {
+  if (req.user.role !== 'Tutor') {
+    return res.status(403).send({ message: 'Forbidden access' });
+  }
+  next();
+};
+
+// Student Middleware
+const verifyStudent = async (req, res, next) => {
+  if (req.user.role !== 'Student') {
+    return res.status(403).send({ message: 'Forbidden access' });
+  }
+  next();
+};
+
+// MONGO CLIENT STUFF
 const user = process.env.MONGO_USER;
 const pass = process.env.MONGO_PASS;
 const uri = `mongodb+srv://${user}:${encodeURIComponent(
@@ -28,47 +70,6 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-
-//JWT Ver middleware
-const verifyToken = (req, res, next) => {
-    const authorization = req.headers.authorization;
-    if (!authorization) {
-        return res.status(401).send({ message: 'Unauthorized access' });
-    }
-    const token = authorization.split(' ')[1];
-    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-        if (err) {
-            return res.status(401).send({ message: 'Unauthorized access' });
-        }
-        req.user = decoded;
-        next();
-    });
-};
-
-// Admin Middleware
-const verifyAdmin = async (req, res, next) => {
-    const email = req.user.email;
-    if(req.user.role !== 'Admin') {
-         return res.status(403).send({ message: 'Forbidden access' });
-    }
-    next();
-};
-
-// Tutor Middleware
-const verifyTutor = async (req, res, next) => {
-    if(req.user.role !== 'Tutor') {
-         return res.status(403).send({ message: 'Forbidden access' });
-    }
-    next();
-};
-
-// Student Middleware
-const verifyStudent = async (req, res, next) => {
-    if(req.user.role !== 'Student') {
-         return res.status(403).send({ message: 'Forbidden access' });
-    }
-    next();
-};
 
 async function run() {
   try {
