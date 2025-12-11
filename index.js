@@ -743,6 +743,68 @@ async function run() {
       res.send(populated);
     });
 
+    // ========================
+    // STATS APIs (Student/Tutor)
+    // ========================
+
+    // Student Stats
+    app.get('/student/stats', verifyToken, verifyStudent, async (req, res) => {
+      const studentId = new ObjectId(req.user.userId);
+
+      // 1. Total Tuitions Posted
+      const totalTuitions = await tuitionsCollection.countDocuments({ studentId });
+      
+      // 2. Approved Tuitions (Ongoing)
+      const approvedTuitions = await tuitionsCollection.countDocuments({ studentId, status: 'Approved' });
+
+      // 3. Total Applications Received (across all their tuitions)
+      // First find all tuition IDs for this student
+      const myTuitions = await tuitionsCollection.find({ studentId }, { projection: { _id: 1 } }).toArray();
+      const tuitionIds = myTuitions.map(t => t._id);
+      
+      const totalApplications = await applicationsCollection.countDocuments({ 
+        tuitionId: { $in: tuitionIds } 
+      });
+
+      // 4. Total Payments Made
+      const payments = await paymentsCollection.find({ studentId }).toArray();
+      const totalPayments = payments.length;
+      const totalSpent = payments.reduce((sum, p) => sum + p.amount, 0);
+
+      res.send({
+        totalTuitions,
+        approvedTuitions,
+        totalApplications,
+        totalPayments,
+        totalSpent
+      });
+    });
+
+    // Tutor Stats
+    app.get('/tutor/stats', verifyToken, verifyTutor, async (req, res) => {
+      const tutorId = new ObjectId(req.user.userId);
+
+      // 1. Total Applications Made
+      const totalApplications = await applicationsCollection.countDocuments({ tutorId });
+
+      // 2. Approved Applications (Ongoing Tuitions)
+      const approvedApplications = await applicationsCollection.countDocuments({ tutorId, status: 'Approved' });
+      
+      // 3. Pending Applications
+      const pendingApplications = await applicationsCollection.countDocuments({ tutorId, status: 'Pending' });
+
+      // 4. Total Revenue
+      const payments = await paymentsCollection.find({ tutorId }).toArray();
+      const totalRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
+
+      res.send({
+        totalApplications,
+        approvedApplications,
+        pendingApplications,
+        totalRevenue
+      });
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
