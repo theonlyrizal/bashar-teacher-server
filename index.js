@@ -523,6 +523,18 @@ async function run() {
       res.send(payments);
     });
 
+    // Admin Stats
+    app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
+      const totalUsers = await usersCollection.countDocuments();
+      const totalTuitions = await tuitionsCollection.countDocuments();
+      const totalRevenueResult = await paymentsCollection
+        .aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }])
+        .toArray();
+      const totalRevenue = totalRevenueResult[0]?.total || 0;
+
+      res.send({ totalUsers, totalTuitions, totalRevenue });
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
