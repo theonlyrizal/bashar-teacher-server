@@ -7,6 +7,9 @@ const bcrypt = require('bcryptjs');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const admin = require('firebase-admin');
 
+const app = express();
+const port = process.env.PORT || 5000;
+
 // Firebase admin sdk
 const decoded = Buffer.from(process.env.FIREBASE_SERVICE_KEY, 'base64').toString('utf8');
 const serviceAccount = JSON.parse(decoded);
@@ -543,3 +546,11 @@ async function run() {
   }
 }
 run().catch(console.dir);
+
+app.get('/', (req, res) => {
+  res.send('Bashar Teacher Server is running...');
+});
+
+app.listen(port, () => {
+  console.log(`Simple Server running on port ${port}`);
+});
