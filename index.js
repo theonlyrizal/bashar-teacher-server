@@ -201,6 +201,44 @@ async function run() {
       );
       res.send(user);
     });
+
+    // ========================
+    // USER APIs
+    // ========================
+
+    app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await usersCollection.find({}, { projection: { password: 0 } }).toArray();
+      res.send(result);
+    });
+
+    app.get('/api/users/tutors/latest', async (req, res) => {
+      const result = await usersCollection
+        .find({ role: 'Tutor' }, { projection: { password: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+      res.send(result);
+    });
+
+    app.patch('/api/users/:id', verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: req.body,
+      };
+      const result = await usersCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    app.delete('/api/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await usersCollection.deleteOne(query);
+      res.send(result);
+    });
+
+
+    
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
