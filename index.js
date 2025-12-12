@@ -428,14 +428,39 @@ async function run() {
       res.send(user);
     });
 
+    // Update User Profile (Self) OR Admin Update
     app.patch('/users/:id', verifyToken, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
+      const updates = req.body;
+
+      // SECURITY: If updating Role, MUST be Admin
+      if (updates.role) {
+        if (req.user.role !== 'Admin') {
+          return res.status(403).send({ message: 'Only Admins can change roles' });
+        }
+      }
+
+      // SECURITY: If not Admin, can ONLY update self
+      if (req.user.role !== 'Admin' && req.user.userId !== id) {
+        return res.status(403).send({ message: 'Forbidden access' });
+      }
+
+      // Prevent updating _id or email (optional but good practice)
+      delete updates._id; 
+      // delete updates.email; // Allow email update? Usually requires verify. Let's keep it flexible for now.
+
       const updatedDoc = {
-        $set: req.body,
+        $set: updates,
       };
-      const result = await usersCollection.updateOne(filter, updatedDoc);
-      res.send(result);
+      
+      try {
+        const result = await usersCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      } catch (err) {
+        console.error("Update user error", err);
+        res.status(500).send({ message: "Failed to update user" });
+      }
     });
 
     app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
@@ -478,6 +503,35 @@ async function run() {
       tuition.status = 'Pending';
       if (tuition.budget) tuition.budget = parseFloat(tuition.budget);
       const result = await tuitionsCollection.insertOne(tuition);
+      res.send(result);
+    });
+
+    // Update Tuition (Student)
+    app.patch('/tuitions/:id', verifyToken, verifyStudent, async (req, res) => {
+      const id = req.params.id;
+      const updates = req.body;
+      
+      const filter = { 
+        _id: new ObjectId(id),
+        studentId: new ObjectId(req.user.userId) // Ensure ownership
+      };
+      
+      // Prevent updating critical fields if needed
+      delete updates._id;
+      delete updates.studentId; 
+      delete updates.status; // Student cannot change status directly, must repost or admin changes
+      
+      // Auto-fixing budget parsing if sent as string
+      if (updates.budget) updates.budget = parseFloat(updates.budget);
+
+      const updatedDoc = {
+        $set: updates
+      };
+
+      const result = await tuitionsCollection.updateOne(filter, updatedDoc);
+      if (result.matchedCount === 0) {
+         return res.status(404).send({ message: 'Tuition not found or unauthorized' });
+      }
       res.send(result);
     });
 
@@ -646,6 +700,35 @@ async function run() {
       );
 
       res.send(populated);
+    });
+
+    // Update Application (Tutor)
+    app.patch('/applications/:id', verifyToken, verifyTutor, async (req, res) => {
+      const id = req.params.id;
+      const updates = req.body;
+      
+      // Ensure ownership and Pending status
+      const filter = { 
+        _id: new ObjectId(id),
+        tutorId: new ObjectId(req.user.userId),
+        status: 'Pending' // Can only update if pending
+      };
+
+      // Prevent updating critical fields
+      delete updates._id;
+      delete updates.tutorId;
+      delete updates.tuitionId;
+      delete updates.status; 
+
+      const updatedDoc = {
+        $set: updates
+      };
+
+      const result = await applicationsCollection.updateOne(filter, updatedDoc);
+      if (result.matchedCount === 0) {
+        return res.status(404).send({ message: 'Application not found, not pending, or unauthorized' });
+      }
+      res.send(result);
     });
 
     app.patch('/applications/:id/reject', verifyToken, verifyStudent, async (req, res) => {
