@@ -150,7 +150,7 @@ app.use(
       'http://localhost:5173',
       'https://bashar-teacher.web.app',
       'https://bashar-teacher.firebaseapp.com',
-      'https://bashar-teacher-client.vercel.app',
+      'https://bashar-teacher.vercel.app',
     ],
     credentials: true,
   })
