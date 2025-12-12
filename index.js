@@ -47,6 +47,7 @@ app.post(
       // Check if this payment was already processed (Idempotency)
       const paymentsCollection = client.db('basharTeacherDB').collection('payments');
       const applicationsCollection = client.db('basharTeacherDB').collection('applications');
+      const transactionsCollection = client.db('basharTeacherDB').collection('transactions');
 
       const existingPayment = await paymentsCollection.findOne({ transactionId: session.id });
       if (existingPayment) {
@@ -92,13 +93,35 @@ app.post(
             }
         );
 
-        // B. Create Payment Record
+        // D. Create Transaction Record (with Revenue Split)
+        const feePercentage = parseInt(process.env.PLATFORM_FEE_PERCENTAGE) || 0;
+        const totalAmount = session.amount_total / 100;
+        const siteRevenue = totalAmount * (feePercentage / 100);
+        const tutorPayment = totalAmount - siteRevenue;
+
+        const transaction = {
+          paymentId: session.id, // Stripe Session ID
+          stripeData: session,   // Full Stripe Session Data
+          tutorId: application.tutorId,
+          studentId: new ObjectId(studentId),
+          applicationId: new ObjectId(applicationId),
+          amount: totalAmount,
+          siteRevenue: siteRevenue,
+          tutorPayment: tutorPayment,
+          timestamp: new Date(),
+        };
+
+        await transactionsCollection.insertOne(transaction);
+        
+        // Keep payments collection for backward compatibility if needed, or simply log it. 
+        // For now, I'll just use the old format for 'payments' collection to avoid breaking existing 'my-payments' views 
+        // until those are updated.
         const payment = {
-          transactionId: session.id, // Unique Stripe ID
+          transactionId: session.id, 
           studentId: new ObjectId(studentId), 
           tutorId: application.tutorId, 
           tuitionId: application.tuitionId,
-          amount: session.amount_total / 100,
+          amount: totalAmount, 
           date: new Date(),
           status: 'Completed',
         };
@@ -210,6 +233,7 @@ async function run() {
     const tuitionsCollection = database.collection('tuitions');
     const applicationsCollection = database.collection('applications');
     const paymentsCollection = database.collection('payments');
+    const transactionsCollection = database.collection('transactions');
 
     // ========================
     // AUTH, USER, TUITION, APPLICATION APIs (NO CHANGES)
@@ -716,59 +740,79 @@ async function run() {
                   message: 'Payment verified and recorded (via webhook)', 
                   payment: existingPayment 
               });
-              // This handles the case where webhook hasn't fired yet (e.g. localhost)
-              // We must perform the SAME logic as the webhook here to ensure consistency
-              const session = await stripe.checkout.sessions.retrieve(sessionId);
-              const applicationId = session.metadata.applicationId;
-              const studentId = session.metadata.studentId;
-
-              const application = await applicationsCollection.findOne({
-                  _id: new ObjectId(applicationId),
-              });
-
-              if (application) {
-                  // A. Approve Application
-                  await applicationsCollection.updateOne(
-                      { _id: new ObjectId(applicationId) },
-                      { $set: { status: 'Approved' } }
-                  );
-
-                  // B. Reject Other Applications
-                  await applicationsCollection.updateMany(
-                      { 
-                          tuitionId: application.tuitionId, 
-                          _id: { $ne: new ObjectId(applicationId) } 
-                      },
-                      { $set: { status: 'Rejected' } }
-                  );
-
-                  // C. Update Tuition
-                  await tuitionsCollection.updateOne(
-                      { _id: application.tuitionId },
-                      { 
-                          $set: { 
-                              tutorId: application.tutorId,
-                              status: 'Assigned' 
-                          } 
-                      }
-                  );
-
-                  // D. Create Payment Record
-                  const payment = {
-                      transactionId: sessionId,
-                      studentId: new ObjectId(studentId),
-                      tutorId: application.tutorId,
-                      tuitionId: application.tuitionId,
-                      amount: session.amount_total / 100,
-                      date: new Date(),
-                      status: 'Completed',
-                  };
-                  await paymentsCollection.insertOne(payment);
-                  
-                  return res.send({ message: 'Payment verified and fulfilled directly.', payment });
-              }
-              return res.send({ message: 'Application not found for fulfillment.' });
           }
+
+          // This handles the case where webhook hasn't fired yet (e.g. localhost)
+          // We must perform the SAME logic as the webhook here to ensure consistency
+          const applicationId = session.metadata.applicationId;
+          const studentId = session.metadata.studentId;
+
+          const application = await applicationsCollection.findOne({
+              _id: new ObjectId(applicationId),
+          });
+
+          if (application) {
+              // A. Approve Application
+              await applicationsCollection.updateOne(
+                  { _id: new ObjectId(applicationId) },
+                  { $set: { status: 'Approved' } }
+              );
+
+              // B. Reject Other Applications
+              await applicationsCollection.updateMany(
+                  { 
+                      tuitionId: application.tuitionId, 
+                      _id: { $ne: new ObjectId(applicationId) } 
+                  },
+                  { $set: { status: 'Rejected' } }
+              );
+
+              // C. Update Tuition
+              await tuitionsCollection.updateOne(
+                  { _id: application.tuitionId },
+                  { 
+                      $set: { 
+                          tutorId: application.tutorId,
+                          status: 'Assigned' 
+                      } 
+                  }
+              );
+
+              // D. Create Transaction Record (with Revenue Split)
+              const feePercentage = parseInt(process.env.PLATFORM_FEE_PERCENTAGE) || 0;
+              const totalAmount = session.amount_total / 100;
+              const siteRevenue = totalAmount * (feePercentage / 100);
+              const tutorPayment = totalAmount - siteRevenue;
+
+              const transaction = {
+                  paymentId: sessionId, // Stripe Session ID
+                  stripeData: session,   // Full Stripe Session Data
+                  tutorId: application.tutorId,
+                  studentId: new ObjectId(studentId),
+                  applicationId: new ObjectId(applicationId),
+                  amount: totalAmount,
+                  siteRevenue: siteRevenue,
+                  tutorPayment: tutorPayment,
+                  timestamp: new Date(),
+              };
+
+              await transactionsCollection.insertOne(transaction);
+              
+              // Keep payments collection for backward compatibility but using legacy fields
+              const payment = {
+                  transactionId: sessionId,
+                  studentId: new ObjectId(studentId),
+                  tutorId: application.tutorId,
+                  tuitionId: application.tuitionId,
+                  amount: totalAmount,
+                  date: new Date(),
+                  status: 'Completed',
+              };
+              await paymentsCollection.insertOne(payment);
+              
+              return res.send({ message: 'Payment verified and fulfilled directly.', payment });
+          }
+          return res.send({ message: 'Application not found for fulfillment.' });
 
       } catch (error) {
           console.error('Error retrieving Stripe session:', error);
@@ -776,42 +820,104 @@ async function run() {
       }
     });
 
-    // Get Payments (Student) (Same as before)
+    // Get Payments (Student)
+    // Fetches from Transactions to show total amount paid
     app.get('/payments/my-payments', verifyToken, verifyStudent, async (req, res) => {
       const query = { studentId: new ObjectId(req.user.userId) };
-      const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
+      const transactions = await transactionsCollection.find(query).sort({ timestamp: -1 }).toArray();
+      
       const populated = await Promise.all(
-        payments.map(async (p) => {
-          const tuition = await tuitionsCollection.findOne({ _id: p.tuitionId });
-          return { ...p, tuition };
+        transactions.map(async (t) => {
+          const tuition = await tuitionsCollection.findOne({ _id: t.tuitionId });
+          // Student sees the total amount they paid
+          return { 
+             _id: t._id,
+             paymentId: t.paymentId,
+             date: t.timestamp,
+             amount: t.amount, // Total amount paid
+             tuition
+          };
         })
       );
       res.send(populated);
     });
 
-    // Get Revenue (Tutor) (Same as before)
+    // Get Revenue (Tutor)
+    // Fetches from Transactions to show their specific earnings
     app.get('/payments/my-revenue', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId) };
-      const payments = await paymentsCollection.find(query).sort({ date: -1 }).toArray();
-      res.send(payments);
+      const transactions = await transactionsCollection.find(query).sort({ timestamp: -1 }).toArray();
+      
+      const sanitized = transactions.map(t => ({
+          _id: t._id,
+          paymentId: t.paymentId,
+          date: t.timestamp,
+          amount: t.tutorPayment, // Tutor sees ONLY their earnings
+          // We can include other non-sensitive fields if needed
+      }));
+
+      res.send(sanitized);
     });
 
-    // Admin Stats
+    // Admin Stats - Enhanced
     app.get('/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
+      const totalStudents = await usersCollection.countDocuments({ role: 'Student' });
+      const totalTutors = await usersCollection.countDocuments({ role: 'Tutor' });
+      
       const totalTuitions = await tuitionsCollection.countDocuments();
-      const totalTransactions = await paymentsCollection.countDocuments();
-      const totalRevenueResult = await paymentsCollection
-        .aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }])
+      const pendingTuitions = await tuitionsCollection.countDocuments({ status: 'Pending' });
+      
+      const totalTransactions = await transactionsCollection.countDocuments();
+      
+      // Calculate Financials: Total Volume (Gross) and Total Revenue (Site Earnings)
+      const financialsResult = await transactionsCollection
+        .aggregate([
+          { 
+            $group: { 
+              _id: null, 
+              totalVolume: { $sum: '$amount' },
+              totalRevenue: { $sum: '$siteRevenue' } 
+            } 
+          }
+        ])
         .toArray();
-      const totalRevenue = totalRevenueResult[0]?.total || 0;
+        
+      const totalVolume = financialsResult[0]?.totalVolume || 0;
+      const totalRevenue = financialsResult[0]?.totalRevenue || 0;
 
       res.send({ 
-        totalUsers, 
-        totalTuitions, 
+        totalUsers,
+        totalStudents,
+        totalTutors,
+        totalTuitions,
+        pendingTuitions,
+        totalVolume,
         totalRevenue,
         totalTransactions 
       });
+    });
+
+    // Public: Latest Tuitions (Home Page)
+    app.get('/tuitions/latest', async (req, res) => {
+      const tuitions = await tuitionsCollection
+          .find({ status: 'Approved' }) // Only show approved on home
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .toArray();
+      res.send(tuitions);
+    });
+
+    // Public: Latest Tutors (Home Page)
+    // Returns 6 Verified Tutors
+    app.get('/users/tutors/latest', async (req, res) => {
+      const tutors = await usersCollection
+          .find({ role: 'Tutor', isVerified: true }) // Verified tutors only
+          .sort({ _id: -1 }) // Newest first
+          .limit(6)
+          .project({ password: 0 }) // Don't send passwords
+          .toArray();
+      res.send(tutors);
     });
 
     // Admin: Get All Payments
@@ -850,14 +956,13 @@ async function run() {
       // 1. Total Tuitions Posted
       const totalTuitions = await tuitionsCollection.countDocuments({ studentId });
       
-      // 2. Approved Tuitions (Ongoing/Assigned) - "Assigned" effectively means approved/ongoing
+      // 2. Approved Tuitions (Ongoing/Assigned)
       const approvedTuitions = await tuitionsCollection.countDocuments({ 
           studentId, 
           status: { $in: ['Approved', 'Assigned'] } 
       });
 
-      // 3. Total Applications Received (across all their tuitions)
-      // First find all tuition IDs for this student
+      // 3. Total Applications Received
       const myTuitions = await tuitionsCollection.find({ studentId }, { projection: { _id: 1 } }).toArray();
       const tuitionIds = myTuitions.map(t => t._id);
       
@@ -865,10 +970,10 @@ async function run() {
         tuitionId: { $in: tuitionIds } 
       });
 
-      // 4. Total Payments Made
-      const payments = await paymentsCollection.find({ studentId }).toArray();
-      const totalPayments = payments.length;
-      const totalSpent = payments.reduce((sum, p) => sum + p.amount, 0);
+      // 4. Total Payments Made (using Transactions)
+      const transactions = await transactionsCollection.find({ studentId }).toArray();
+      const totalPayments = transactions.length;
+      const totalSpent = transactions.reduce((sum, t) => sum + t.amount, 0);
 
       res.send({
         totalTuitions,
@@ -886,15 +991,15 @@ async function run() {
       // 1. Total Applications Made
       const totalApplications = await applicationsCollection.countDocuments({ tutorId });
 
-      // 2. Approved Applications (Ongoing Tuitions)
+      // 2. Approved Applications
       const approvedApplications = await applicationsCollection.countDocuments({ tutorId, status: 'Approved' });
       
       // 3. Pending Applications
       const pendingApplications = await applicationsCollection.countDocuments({ tutorId, status: 'Pending' });
 
-      // 4. Total Revenue
-      const payments = await paymentsCollection.find({ tutorId }).toArray();
-      const totalRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
+      // 4. Total Revenue (Earnings from Transactions)
+      const transactions = await transactionsCollection.find({ tutorId }).toArray();
+      const totalRevenue = transactions.reduce((sum, t) => sum + (t.tutorPayment || 0), 0);
 
       res.send({
         totalApplications,
