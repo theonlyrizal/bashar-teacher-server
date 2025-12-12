@@ -540,7 +540,7 @@ async function run() {
       const limit = parseInt(req.query.limit) || 9;
       const skip = (page - 1) * limit;
 
-      const { search, subject, location, class: classFilter, sort } = req.query;
+      const { search, subject, location, class: classFilter, sort, sortBy, sortOrder } = req.query;
 
       let query = { status: 'Approved' };
 
@@ -555,8 +555,16 @@ async function run() {
       if (classFilter) query.class = classFilter;
 
       let sortOptions = { createdAt: -1 };
+      
+      // Backward compatibility for 'sort' param
       if (sort === 'budgetAsc') sortOptions = { budget: 1 };
       if (sort === 'budgetDesc') sortOptions = { budget: -1 };
+
+      // Handle new sortBy/sortOrder params from frontend
+      if (sortBy) {
+        const order = sortOrder === 'asc' ? 1 : -1;
+        sortOptions = { [sortBy]: order };
+      }
 
       const total = await tuitionsCollection.countDocuments(query);
       const result = await tuitionsCollection
@@ -687,7 +695,11 @@ async function run() {
     // Approved applications (Tutor)
     app.get('/applications/approved', verifyToken, verifyTutor, async (req, res) => {
       const query = { tutorId: new ObjectId(req.user.userId), status: 'Approved' };
+      console.log('Fetching Approved Apps for Tutor:', req.user.userId);
+      console.log('Query:', JSON.stringify(query));
+      
       const applications = await applicationsCollection.find(query).toArray();
+      console.log('Found Approved Apps:', applications.length);
 
       const populated = await Promise.all(
         applications.map(async (app) => {
@@ -698,7 +710,7 @@ async function run() {
           return { ...app, tuition, student };
         })
       );
-
+      
       res.send(populated);
     });
 
