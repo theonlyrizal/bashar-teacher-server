@@ -71,6 +71,27 @@ app.post(
           { $set: { status: 'Approved' } }
         );
 
+        // B. Reject Other Applications for the same tuition
+        await applicationsCollection.updateMany(
+            { 
+              tuitionId: application.tuitionId, 
+              _id: { $ne: new ObjectId(applicationId) } 
+            },
+            { $set: { status: 'Rejected' } }
+        );
+
+        // C. Update Tuition (Assign Tutor & Change Status)
+        // Changing status to 'Assigned' removes it from the public job board (since GET /tuitions filters by 'Approved')
+        await tuitionsCollection.updateOne(
+            { _id: application.tuitionId },
+            { 
+                $set: { 
+                    tutorId: application.tutorId,
+                    status: 'Assigned' 
+                } 
+            }
+        );
+
         // B. Create Payment Record
         const payment = {
           transactionId: session.id, // Unique Stripe ID
