@@ -415,8 +415,30 @@ async function run() {
     app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
-      const result = await usersCollection.deleteOne(query);
-      res.send(result);
+      
+      try {
+        // 1. Find user to get firebaseUid
+        const user = await usersCollection.findOne(query);
+
+        if (user && user.firebaseUid) {
+          try {
+            // 2. Delete from Firebase
+            await admin.auth().deleteUser(user.firebaseUid);
+            console.log(`Successfully deleted user from Firebase: ${user.firebaseUid}`);
+          } catch (firebaseError) {
+            console.error('Error deleting user from Firebase:', firebaseError);
+            // Continue execution to delete from DB even if Firebase fails 
+            // (e.g. user already deleted in Firebase manually)
+          }
+        }
+
+        // 3. Delete from MongoDB
+        const result = await usersCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).send({ message: 'Failed to delete user' });
+      }
     });
 
     // ========================
@@ -537,6 +559,12 @@ async function run() {
         tuitionId: application.tuitionId,
       });
       if (existing) return res.send({ message: 'Already applied' });
+
+      // Check if tuition is already assigned
+      const tuition = await tuitionsCollection.findOne({ _id: application.tuitionId });
+      if (tuition && tuition.status === 'Assigned') {
+           return res.send({ message: 'This tuition has already been assigned to another tutor.' });
+      }
 
       const result = await applicationsCollection.insertOne(application);
       res.send(result);
@@ -688,12 +716,58 @@ async function run() {
                   message: 'Payment verified and recorded (via webhook)', 
                   payment: existingPayment 
               });
-          } else {
-              // This is a rare edge case where the user hit the success URL before the webhook
-              // but we still want to confirm. You could trigger a small delay here 
-              // or just return a status indicating "Payment in process".
-              // For simplicity, we just confirm that Stripe says it's paid.
-              return res.send({ message: 'Payment verified. Fulfillment processing.', session_id: sessionId });
+              // This handles the case where webhook hasn't fired yet (e.g. localhost)
+              // We must perform the SAME logic as the webhook here to ensure consistency
+              const session = await stripe.checkout.sessions.retrieve(sessionId);
+              const applicationId = session.metadata.applicationId;
+              const studentId = session.metadata.studentId;
+
+              const application = await applicationsCollection.findOne({
+                  _id: new ObjectId(applicationId),
+              });
+
+              if (application) {
+                  // A. Approve Application
+                  await applicationsCollection.updateOne(
+                      { _id: new ObjectId(applicationId) },
+                      { $set: { status: 'Approved' } }
+                  );
+
+                  // B. Reject Other Applications
+                  await applicationsCollection.updateMany(
+                      { 
+                          tuitionId: application.tuitionId, 
+                          _id: { $ne: new ObjectId(applicationId) } 
+                      },
+                      { $set: { status: 'Rejected' } }
+                  );
+
+                  // C. Update Tuition
+                  await tuitionsCollection.updateOne(
+                      { _id: application.tuitionId },
+                      { 
+                          $set: { 
+                              tutorId: application.tutorId,
+                              status: 'Assigned' 
+                          } 
+                      }
+                  );
+
+                  // D. Create Payment Record
+                  const payment = {
+                      transactionId: sessionId,
+                      studentId: new ObjectId(studentId),
+                      tutorId: application.tutorId,
+                      tuitionId: application.tuitionId,
+                      amount: session.amount_total / 100,
+                      date: new Date(),
+                      status: 'Completed',
+                  };
+                  await paymentsCollection.insertOne(payment);
+                  
+                  return res.send({ message: 'Payment verified and fulfilled directly.', payment });
+              }
+              return res.send({ message: 'Application not found for fulfillment.' });
           }
 
       } catch (error) {
@@ -776,8 +850,11 @@ async function run() {
       // 1. Total Tuitions Posted
       const totalTuitions = await tuitionsCollection.countDocuments({ studentId });
       
-      // 2. Approved Tuitions (Ongoing)
-      const approvedTuitions = await tuitionsCollection.countDocuments({ studentId, status: 'Approved' });
+      // 2. Approved Tuitions (Ongoing/Assigned) - "Assigned" effectively means approved/ongoing
+      const approvedTuitions = await tuitionsCollection.countDocuments({ 
+          studentId, 
+          status: { $in: ['Approved', 'Assigned'] } 
+      });
 
       // 3. Total Applications Received (across all their tuitions)
       // First find all tuition IDs for this student
