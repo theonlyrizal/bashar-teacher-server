@@ -151,10 +151,8 @@ app.use(express.json());
 // Configure CORS and Firebase as before
 app.use(cors({
   origin: [
-    "http://localhost:5173",
-    "https://bashar-teacher.web.app",
-    "https://bashar-teacher.firebaseapp.com",
     "https://bashar-teacher-client.vercel.app",
+    "http://localhost:5173",
   ],
   credentials: true
 }));
