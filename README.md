@@ -34,7 +34,7 @@ This repository contains the backend API for the Bashar Teacher platform. It han
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/bashar-teacher-server.git
+   git clone https://github.com/theonlyrizal/bashar-teacher-server.git
    cd bashar-teacher-server
    ```
 
